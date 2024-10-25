@@ -150,4 +150,5 @@ if __name__ == "__main__":
     # Each fund will be in its own sheet
     with pd.ExcelWriter('funds.xlsx') as excel_file:
         for data, sheet_name in fund_data:
+            sheet_name = sheet_name[:31]
             data.to_excel(excel_file, sheet_name=sheet_name, index=False)
