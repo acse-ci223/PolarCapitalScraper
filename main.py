@@ -131,7 +131,7 @@ def scrape_fund_data():
             current_fund_data = extract_table_data(page)
             if current_fund_data is not None:
                 # Get fund name from the URL
-                fund_name = get_fund_name(url)
+                fund_name = get_fund_name(url) + " Fund"
                 # Store both the data and fund name
                 fund_data.append((current_fund_data, fund_name))
 
