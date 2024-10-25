@@ -1,107 +1,153 @@
-import time
-import pandas as pd
-from playwright.sync_api import sync_playwright
-from bs4 import BeautifulSoup
+# This script scrapes investment fund data from Polar Capital's website and saves it to Excel
+# It gets the top 10 positions for multiple funds and their corresponding weights
 
-# Function to scrape the table data from a given URL and table ID
-def scrape_table_data(page, table_id):
-    # Wait for the page to load
+# Import necessary external tools (libraries)
+import time  # For adding delays between actions
+import pandas as pd  # For handling data in table format
+from playwright.sync_api import sync_playwright  # For controlling a web browser
+from bs4 import BeautifulSoup  # For reading website content
+import re  # For finding specific text patterns
+
+# Define the websites we want to get data from
+# Main website where we'll handle cookies and terms of service
+MAIN_URL = "https://www.polarcapital.co.uk/gb/individual/"
+
+# List of specific fund pages we want to scrape data from
+FUND_URLS = [
+    "https://www.polarcapital.co.uk/gb/individual/Our-Funds/Artificial-Intelligence/#/Portfolio",
+    "https://www.polarcapital.co.uk/gb/individual/Our-Funds/Emerging-Markets-Healthcare/#/Portfolio",
+    "https://www.polarcapital.co.uk/gb/individual/Our-Funds/Financial-Opportunities/#/Portfolio"
+]
+
+
+def get_fund_name(url):
+    """
+    Takes a URL and extracts the fund name from it
+    Example: Converts "Our-Funds/Artificial-Intelligence/#/Portfolio" to "Artificial Intelligence"
+    """
+    # Get the text between 'Our-Funds/' and '/#' in the URL
+    fund_name = url.split('Our-Funds/')[1].split('/#')[0]
+    # Convert hyphens to spaces for readability
+    return fund_name.replace('-', ' ')
+
+
+def accept_website_terms(page):
+    """
+    Handles the initial website popups:
+    1. Accepts cookies
+    2. Accepts terms of service
+    This needs to be done before we can access the fund data
+    """
+    # Go to the main website
+    page.goto(MAIN_URL)
+
+    # Try to accept cookies (skip if it fails)
+    try:
+        page.evaluate("CookieInformation.submitAllCategories();")
+    except Exception:
+        pass
+
+    # Try to accept terms of service (skip if it fails)
+    try:
+        page.wait_for_selector('a.Btn.-accept', timeout=10000)
+        page.locator('a.Btn.-accept').click()
+    except Exception:
+        pass
+
+    # Wait for everything to load
     time.sleep(1)
 
-    # Get the page content after interaction
+
+def extract_table_data(page):
+    """
+    Finds the top 10 positions table on the webpage and extracts:
+    1. Position names
+    2. Their weights in the portfolio
+    Returns this data in a table format
+    """
+    # Get the entire webpage content
     html_content = page.content()
 
-    # Parse the page content with BeautifulSoup
+    # Parse the webpage content so we can search through it
     soup = BeautifulSoup(html_content, 'html.parser')
 
-    # Find the table with the specific ID
-    table = soup.find('table', {'id': table_id})
+    # Find the section that contains "Top 10 Positions"
+    header = soup.find(string=re.compile("Top 10 Positions", re.IGNORECASE))
 
-    # Check if the table was found
-    if table:
-        # Extract data from the rows (excluding the footer row)
-        rows = table.find_all('tr')[:-1]  # Skip the last row (footer with "Total")
+    if header:
+        # Find the table near this header
+        table = header.parent.parent.find('table')
+        if table:
+            # Get all rows except the last one (which is usually a total)
+            rows = table.find_all('tr')[:-1]
 
-        positions = []
-        weights = []
+            # Create lists to store our data
+            positions = []  # Will store position names
+            weights = []    # Will store position weights
 
-        for row in rows:
-            columns = row.find_all('td')
-            position_name = columns[0].get_text().strip()
-            weight = columns[1].get_text().strip()
-            positions.append(position_name)
-            weights.append(weight)
+            # Go through each row and extract the data
+            for row in rows:
+                columns = row.find_all('td')
+                if len(columns) >= 2:
+                    positions.append(columns[0].get_text().strip())
+                    weights.append(columns[1].get_text().strip())
 
-        # Create a dataframe from the scraped data
-        df = pd.DataFrame({'Position': positions, 'Weight (%)': weights})
-        return df
-    else:
-        print(f"Table with ID {table_id} not found.")
-        return None
+            # Create a neat table (DataFrame) from our extracted data
+            return pd.DataFrame({'Position': positions, 'Weight (%)': weights})
 
-# Function to handle the entire scraping workflow for multiple URLs
-def scrape_multiple_pages():
-    # List of URLs and corresponding table IDs
-    urls_and_tables = [
-        ("https://www.polarcapital.co.uk/gb/individual/Our-Funds/Artificial-Intelligence/#/Portfolio", "c33074f2-acb5-4725-b2af-6570d30e11eb"),
-        ("https://www.polarcapital.co.uk/gb/individual/Our-Funds/Emerging-Markets-Healthcare/#/Portfolio", "e12a3f1b-70c0-4e58-bf07-8637a0d0aa02"),
-        ("https://www.polarcapital.co.uk/gb/individual/Our-Funds/Financial-Opportunities/#/Portfolio", "dbc69301-3cd8-4ea2-84d0-ecbc3d5358d5")
-    ]
+    # Return None if we couldn't find the table
+    return None
 
+
+def scrape_fund_data():
+    """
+    Main function that:
+    1. Opens a web browser
+    2. Goes to each fund page
+    3. Extracts the data
+    4. Returns all collected data
+    """
+    # List to store all our collected data
+    fund_data = []
+
+    # Start a web browser session
     with sync_playwright() as p:
-        # Start a browser (headless mode can be False for debugging)
-        browser = p.chromium.launch(headless=False)
+        # Launch Chrome in background mode (no visible window)
+        browser = p.chromium.launch(headless=True)
         page = browser.new_page()
 
-        dataframes = []  # To store dataframes for all three tables
+        print("Accepting website terms...")
+        # Handle the website terms first
+        accept_website_terms(page)
 
-        # First URL: Handle cookies and ToS only once
-        first_url, first_table_id = urls_and_tables[0]
-        page.goto(first_url)
-
-        # Accept cookies via JavaScript
-        try:
-            page.evaluate("CookieInformation.submitAllCategories();")
-            print("Accepted cookies via JavaScript.")
-        except Exception as e:
-            print(f"Error while executing cookie acceptance JavaScript: {e}")
-
-        # Accept Terms of Service (ToS)
-        try:
-            page.wait_for_selector('a.Btn.-accept', timeout=10000)  # Wait for the button to appear
-            tos_button = page.locator('a.Btn.-accept')
-            tos_button.click()
-            print("Accepted Terms of Service.")
-        except Exception as e:
-            print(f"Error while accepting Terms of Service: {e}")
-
-        # Scrape the table data for the first URL
-        df1 = scrape_table_data(page, first_table_id)
-        if df1 is not None:
-            dataframes.append((df1, "Artificial Intelligence"))
-
-        # Scrape data for the remaining URLs without accepting cookies/ToS again
-        for url, table_id in urls_and_tables[1:]:
+        # Process each fund URL one by one
+        for url in FUND_URLS:
+            print(f"Processing fund: {url}")
+            # Go to the fund's page
             page.goto(url)
-            print(f"Navigating to {url}...")
+            time.sleep(1)  # Wait for page to load
 
-            # Scrape the table data for subsequent URLs
-            df = scrape_table_data(page, table_id)
-            if df is not None:
-                sheet_name = "Emerging Markets" if "Emerging" in url else "Financial Opportunities"
-                dataframes.append((df, sheet_name))
+            # Try to get the fund's data
+            current_fund_data = extract_table_data(page)
+            if current_fund_data is not None:
+                # Get fund name from the URL
+                fund_name = get_fund_name(url)
+                # Store both the data and fund name
+                fund_data.append((current_fund_data, fund_name))
 
-        # Close the browser
+        # Close the browser when we're done
         browser.close()
 
-        return dataframes
+    return fund_data
 
-# Call the function to scrape the pages and get the dataframes
-dataframes = scrape_multiple_pages()
 
-# Save the dataframes to an Excel file with each dataframe in a separate sheet
-with pd.ExcelWriter('funds.xlsx') as writer:
-    for df, sheet_name in dataframes:
-        df.to_excel(writer, sheet_name=sheet_name, index=False)
+# This is where the script actually starts running
+if __name__ == "__main__":
+    # Get data from all funds
+    fund_data = scrape_fund_data()
 
-print("Data successfully written to 'funds.xlsx'.")
+    # Save all the data to an Excel file
+    # Each fund will be in its own sheet
+    with pd.ExcelWriter('funds.xlsx') as excel_file:
+        for data, sheet_name in fund_data:
+            data.to_excel(excel_file, sheet_name=sheet_name, index=False)
